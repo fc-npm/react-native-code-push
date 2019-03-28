@@ -1,14 +1,19 @@
-import { AcquisitionManager as Sdk } from "code-push/script/acquisition-sdk";
-import { Alert } from "./AlertAdapter";
-import requestFetchAdapter from "./request-fetch-adapter";
-import { AppState, Platform } from "react-native";
-import RestartManager from "./RestartManager";
-import log from "./logging";
+import { AcquisitionManager as Sdk } from 'code-push/script/acquisition-sdk';
+import { Alert } from './AlertAdapter';
+import requestFetchAdapter from './request-fetch-adapter';
+import { AppState, Platform } from 'react-native';
+import RestartManager from './RestartManager';
+import log from './logging';
 import hoistStatics from 'hoist-non-react-statics';
 
-let NativeCodePush = require("react-native").NativeModules.CodePush;
-const PackageMixins = require("./package-mixins")(NativeCodePush);
-
+let NativeCodePush = require('react-native').NativeModules.CodePush;
+const PackageMixins = require('./package-mixins')(NativeCodePush);
+let downloadMark = false;
+function changeDownloadMark() {
+  // 原本检查会自动下载安装包（未发现原因）
+  // 解决方法：检查是否有更新时，不下载安装包，点击自定义更新时下载
+  downloadMark = true;
+}
 async function checkForUpdate(deploymentKey = null, handleBinaryVersionMismatchCallback = null) {
   /*
    * Before we ask the server if an update exists, we
@@ -46,7 +51,7 @@ async function checkForUpdate(deploymentKey = null, handleBinaryVersionMismatchC
     queryPackage = localPackage;
   } else {
     queryPackage = { appVersion: config.appVersion };
-    if (Platform.OS === "ios" && config.packageHash) {
+    if (Platform.OS === 'ios' && config.packageHash) {
       queryPackage.packageHash = config.packageHash;
     }
   }
@@ -71,13 +76,19 @@ async function checkForUpdate(deploymentKey = null, handleBinaryVersionMismatchC
    *    because we want to avoid having to install diff updates against the binary's
    *    version, which we can't do yet on Android.
    */
-  if (!update || update.updateAppVersion ||
-      localPackage && (update.packageHash === localPackage.packageHash) ||
-      (!localPackage || localPackage._isDebugOnly) && config.packageHash === update.packageHash) {
+  if (
+    !update ||
+    update.updateAppVersion ||
+    (localPackage && update.packageHash === localPackage.packageHash) ||
+    ((!localPackage || localPackage._isDebugOnly) && config.packageHash === update.packageHash)
+  ) {
     if (update && update.updateAppVersion) {
-      log("An update is available but it is not targeting the binary version of your app.");
-      if (handleBinaryVersionMismatchCallback && typeof handleBinaryVersionMismatchCallback === "function") {
-        handleBinaryVersionMismatchCallback(update)
+      log('An update is available but it is not targeting the binary version of your app.');
+      if (
+        handleBinaryVersionMismatchCallback &&
+        typeof handleBinaryVersionMismatchCallback === 'function'
+      ) {
+        handleBinaryVersionMismatchCallback(update);
       }
     }
 
@@ -101,7 +112,7 @@ const getConfiguration = (() => {
       config = await NativeCodePush.getConfiguration();
       return config;
     }
-  }
+  };
 })();
 
 async function getCurrentPackage() {
@@ -109,9 +120,11 @@ async function getCurrentPackage() {
 }
 
 async function getUpdateMetadata(updateState) {
-  let updateMetadata = await NativeCodePush.getUpdateMetadata(updateState || CodePush.UpdateState.RUNNING);
+  let updateMetadata = await NativeCodePush.getUpdateMetadata(
+    updateState || CodePush.UpdateState.RUNNING,
+  );
   if (updateMetadata) {
-    updateMetadata = {...PackageMixins.local, ...updateMetadata};
+    updateMetadata = { ...PackageMixins.local, ...updateMetadata };
     updateMetadata.failedInstall = await NativeCodePush.isFailedUpdate(updateMetadata.packageHash);
     updateMetadata.isFirstRun = await NativeCodePush.isFirstRun(updateMetadata.packageHash);
   }
@@ -123,37 +136,57 @@ function getPromisifiedSdk(requestFetchAdapter, config) {
   const sdk = new module.exports.AcquisitionSdk(requestFetchAdapter, config);
   sdk.queryUpdateWithCurrentPackage = (queryPackage) => {
     return new Promise((resolve, reject) => {
-      module.exports.AcquisitionSdk.prototype.queryUpdateWithCurrentPackage.call(sdk, queryPackage, (err, update) => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve(update);
-        }
-      });
+      module.exports.AcquisitionSdk.prototype.queryUpdateWithCurrentPackage.call(
+        sdk,
+        queryPackage,
+        (err, update) => {
+          if (err) {
+            reject(err);
+          } else {
+            resolve(update);
+          }
+        },
+      );
     });
   };
 
-  sdk.reportStatusDeploy = (deployedPackage, status, previousLabelOrAppVersion, previousDeploymentKey) => {
+  sdk.reportStatusDeploy = (
+    deployedPackage,
+    status,
+    previousLabelOrAppVersion,
+    previousDeploymentKey,
+  ) => {
     return new Promise((resolve, reject) => {
-      module.exports.AcquisitionSdk.prototype.reportStatusDeploy.call(sdk, deployedPackage, status, previousLabelOrAppVersion, previousDeploymentKey, (err) => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve();
-        }
-      });
+      module.exports.AcquisitionSdk.prototype.reportStatusDeploy.call(
+        sdk,
+        deployedPackage,
+        status,
+        previousLabelOrAppVersion,
+        previousDeploymentKey,
+        (err) => {
+          if (err) {
+            reject(err);
+          } else {
+            resolve();
+          }
+        },
+      );
     });
   };
 
   sdk.reportStatusDownload = (downloadedPackage) => {
     return new Promise((resolve, reject) => {
-      module.exports.AcquisitionSdk.prototype.reportStatusDownload.call(sdk, downloadedPackage, (err) => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve();
-        }
-      });
+      module.exports.AcquisitionSdk.prototype.reportStatusDownload.call(
+        sdk,
+        downloadedPackage,
+        (err) => {
+          if (err) {
+            reject(err);
+          } else {
+            resolve();
+          }
+        },
+      );
     });
   };
 
@@ -190,10 +223,15 @@ async function tryReportStatus(statusReport, resumeListener) {
       log(`Reporting binary update (${statusReport.appVersion})`);
 
       const sdk = getPromisifiedSdk(requestFetchAdapter, config);
-      await sdk.reportStatusDeploy(/* deployedPackage */ null, /* status */ null, previousLabelOrAppVersion, previousDeploymentKey);
+      await sdk.reportStatusDeploy(
+        /* deployedPackage */ null,
+        /* status */ null,
+        previousLabelOrAppVersion,
+        previousDeploymentKey,
+      );
     } else {
       const label = statusReport.package.label;
-      if (statusReport.status === "DeploymentSucceeded") {
+      if (statusReport.status === 'DeploymentSucceeded') {
         log(`Reporting CodePush update success (${label})`);
       } else {
         log(`Reporting CodePush update rollback (${label})`);
@@ -201,26 +239,31 @@ async function tryReportStatus(statusReport, resumeListener) {
 
       config.deploymentKey = statusReport.package.deploymentKey;
       const sdk = getPromisifiedSdk(requestFetchAdapter, config);
-      await sdk.reportStatusDeploy(statusReport.package, statusReport.status, previousLabelOrAppVersion, previousDeploymentKey);
+      await sdk.reportStatusDeploy(
+        statusReport.package,
+        statusReport.status,
+        previousLabelOrAppVersion,
+        previousDeploymentKey,
+      );
     }
 
     NativeCodePush.recordStatusReported(statusReport);
-    resumeListener && AppState.removeEventListener("change", resumeListener);
+    resumeListener && AppState.removeEventListener('change', resumeListener);
   } catch (e) {
     log(`Report status failed: ${JSON.stringify(statusReport)}`);
     NativeCodePush.saveStatusReportForRetry(statusReport);
     // Try again when the app resumes
     if (!resumeListener) {
       resumeListener = async (newState) => {
-        if (newState !== "active") return;
+        if (newState !== 'active') return;
         const refreshedStatusReport = await NativeCodePush.getNewStatusReport();
         if (refreshedStatusReport) {
           tryReportStatus(refreshedStatusReport, resumeListener);
         } else {
-          AppState.removeEventListener("change", resumeListener);
+          AppState.removeEventListener('change', resumeListener);
         }
       };
-      AppState.addEventListener("change", resumeListener);
+      AppState.addEventListener('change', resumeListener);
     }
   }
 }
@@ -238,42 +281,51 @@ function setUpTestDependencies(testSdk, providedTestConfig, testNativeBridge) {
 // Parallel calls to sync() while one is ongoing yields CodePush.SyncStatus.SYNC_IN_PROGRESS.
 const sync = (() => {
   let syncInProgress = false;
-  const setSyncCompleted = () => { syncInProgress = false; };
+  const setSyncCompleted = () => {
+    syncInProgress = false;
+  };
 
-  return (options = {}, syncStatusChangeCallback, downloadProgressCallback, handleBinaryVersionMismatchCallback) => {
+  return (
+    options = {},
+    syncStatusChangeCallback,
+    downloadProgressCallback,
+    handleBinaryVersionMismatchCallback,
+  ) => {
     let syncStatusCallbackWithTryCatch, downloadProgressCallbackkWithTryCatch;
-    if (typeof syncStatusChangeCallback === "function") {
+    if (typeof syncStatusChangeCallback === 'function') {
       syncStatusCallbackWithTryCatch = (...args) => {
         try {
           syncStatusChangeCallback(...args);
         } catch (error) {
           log(`An error has occurred : ${error.stack}`);
         }
-      }
+      };
     }
-
-    if (typeof downloadProgressCallback === "function") {
+    if (typeof downloadProgressCallback === 'function') {
       downloadProgressCallbackkWithTryCatch = (...args) => {
         try {
           downloadProgressCallback(...args);
         } catch (error) {
           log(`An error has occurred: ${error.stack}`);
         }
-      }
+      };
     }
 
     if (syncInProgress) {
-      typeof syncStatusCallbackWithTryCatch === "function"
+      typeof syncStatusCallbackWithTryCatch === 'function'
         ? syncStatusCallbackWithTryCatch(CodePush.SyncStatus.SYNC_IN_PROGRESS)
-        : log("Sync already in progress.");
+        : log('Sync already in progress.');
       return Promise.resolve(CodePush.SyncStatus.SYNC_IN_PROGRESS);
     }
 
     syncInProgress = true;
-    const syncPromise = syncInternal(options, syncStatusCallbackWithTryCatch, downloadProgressCallbackkWithTryCatch, handleBinaryVersionMismatchCallback);
-    syncPromise
-      .then(setSyncCompleted)
-      .catch(setSyncCompleted);
+    const syncPromise = syncInternal(
+      options,
+      syncStatusCallbackWithTryCatch,
+      downloadProgressCallbackkWithTryCatch,
+      handleBinaryVersionMismatchCallback,
+    );
+    syncPromise.then(setSyncCompleted).catch(setSyncCompleted);
 
     return syncPromise;
   };
@@ -288,7 +340,12 @@ const sync = (() => {
  * releases, and displaying a standard confirmation UI to the end-user
  * when an update is available.
  */
-async function syncInternal(options = {}, syncStatusChangeCallback, downloadProgressCallback, handleBinaryVersionMismatchCallback) {
+async function syncInternal(
+  options = {},
+  syncStatusChangeCallback,
+  downloadProgressCallback,
+  handleBinaryVersionMismatchCallback,
+) {
   let resolvedInstallMode;
   const syncOptions = {
     deploymentKey: null,
@@ -297,60 +354,70 @@ async function syncInternal(options = {}, syncStatusChangeCallback, downloadProg
     mandatoryInstallMode: CodePush.InstallMode.IMMEDIATE,
     minimumBackgroundDuration: 0,
     updateDialog: null,
-    ...options
+    ...options,
   };
 
-  syncStatusChangeCallback = typeof syncStatusChangeCallback === "function"
-    ? syncStatusChangeCallback
-    : (syncStatus) => {
-        switch(syncStatus) {
-          case CodePush.SyncStatus.CHECKING_FOR_UPDATE:
-            log("Checking for update.");
-            break;
-          case CodePush.SyncStatus.AWAITING_USER_ACTION:
-            log("Awaiting user action.");
-            break;
-          case CodePush.SyncStatus.DOWNLOADING_PACKAGE:
-            log("Downloading package.");
-            break;
-          case CodePush.SyncStatus.INSTALLING_UPDATE:
-            log("Installing update.");
-            break;
-          case CodePush.SyncStatus.UP_TO_DATE:
-            log("App is up to date.");
-            break;
-          case CodePush.SyncStatus.UPDATE_IGNORED:
-            log("User cancelled the update.");
-            break;
-          case CodePush.SyncStatus.UPDATE_INSTALLED:
-            if (resolvedInstallMode == CodePush.InstallMode.ON_NEXT_RESTART) {
-              log("Update is installed and will be run on the next app restart.");
-            } else if (resolvedInstallMode == CodePush.InstallMode.ON_NEXT_RESUME) {
-              if (syncOptions.minimumBackgroundDuration > 0) {
-                log(`Update is installed and will be run after the app has been in the background for at least ${syncOptions.minimumBackgroundDuration} seconds.`);
-              } else {
-                log("Update is installed and will be run when the app next resumes.");
+  syncStatusChangeCallback =
+    typeof syncStatusChangeCallback === 'function'
+      ? syncStatusChangeCallback
+      : (syncStatus) => {
+          switch (syncStatus) {
+            case CodePush.SyncStatus.CHECKING_FOR_UPDATE:
+              log('Checking for update.');
+              break;
+            case CodePush.SyncStatus.AWAITING_USER_ACTION:
+              log('Awaiting user action.');
+              break;
+            case CodePush.SyncStatus.DOWNLOADING_PACKAGE:
+              log('Downloading package.');
+              break;
+            case CodePush.SyncStatus.INSTALLING_UPDATE:
+              log('Installing update.');
+              break;
+            case CodePush.SyncStatus.UP_TO_DATE:
+              log('App is up to date.');
+              break;
+            case CodePush.SyncStatus.UPDATE_IGNORED:
+              log('User cancelled the update.');
+              break;
+            case CodePush.SyncStatus.UPDATE_INSTALLED:
+              if (resolvedInstallMode == CodePush.InstallMode.ON_NEXT_RESTART) {
+                log('Update is installed and will be run on the next app restart.');
+              } else if (resolvedInstallMode == CodePush.InstallMode.ON_NEXT_RESUME) {
+                if (syncOptions.minimumBackgroundDuration > 0) {
+                  log(
+                    `Update is installed and will be run after the app has been in the background for at least ${
+                      syncOptions.minimumBackgroundDuration
+                    } seconds.`,
+                  );
+                } else {
+                  log('Update is installed and will be run when the app next resumes.');
+                }
               }
-            }
-            break;
-          case CodePush.SyncStatus.UNKNOWN_ERROR:
-            log("An unknown error occurred.");
-            break;
-        }
-      };
+              break;
+            case CodePush.SyncStatus.UNKNOWN_ERROR:
+              log('An unknown error occurred.');
+              break;
+          }
+        };
 
   try {
     await CodePush.notifyApplicationReady();
 
     syncStatusChangeCallback(CodePush.SyncStatus.CHECKING_FOR_UPDATE);
-    const remotePackage = await checkForUpdate(syncOptions.deploymentKey, handleBinaryVersionMismatchCallback);
+    const remotePackage = await checkForUpdate(
+      syncOptions.deploymentKey,
+      handleBinaryVersionMismatchCallback,
+    );
 
     const doDownloadAndInstall = async () => {
       syncStatusChangeCallback(CodePush.SyncStatus.DOWNLOADING_PACKAGE);
       const localPackage = await remotePackage.download(downloadProgressCallback);
 
       // Determine the correct install mode based on whether the update is mandatory or not.
-      resolvedInstallMode = localPackage.isMandatory ? syncOptions.mandatoryInstallMode : syncOptions.installMode;
+      resolvedInstallMode = localPackage.isMandatory
+        ? syncOptions.mandatoryInstallMode
+        : syncOptions.installMode;
 
       syncStatusChangeCallback(CodePush.SyncStatus.INSTALLING_UPDATE);
       await localPackage.install(resolvedInstallMode, syncOptions.minimumBackgroundDuration, () => {
@@ -360,10 +427,13 @@ async function syncInternal(options = {}, syncStatusChangeCallback, downloadProg
       return CodePush.SyncStatus.UPDATE_INSTALLED;
     };
 
-    const updateShouldBeIgnored = remotePackage && (remotePackage.failedInstall && syncOptions.ignoreFailedUpdates);
+    const updateShouldBeIgnored =
+      remotePackage && (remotePackage.failedInstall && syncOptions.ignoreFailedUpdates);
     if (!remotePackage || updateShouldBeIgnored) {
       if (updateShouldBeIgnored) {
-          log("An update is available, but it is being ignored due to having been previously rolled back.");
+        log(
+          'An update is available, but it is being ignored due to having been previously rolled back.',
+        );
       }
 
       const currentPackage = await CodePush.getCurrentPackage();
@@ -377,10 +447,13 @@ async function syncInternal(options = {}, syncStatusChangeCallback, downloadProg
     } else if (syncOptions.updateDialog) {
       // updateDialog supports any truthy value (e.g. true, "goo", 12),
       // but we should treat a non-object value as just the default dialog
-      if (typeof syncOptions.updateDialog !== "object") {
+      if (typeof syncOptions.updateDialog !== 'object') {
         syncOptions.updateDialog = CodePush.DEFAULT_UPDATE_DIALOG;
       } else {
-        syncOptions.updateDialog = { ...CodePush.DEFAULT_UPDATE_DIALOG, ...syncOptions.updateDialog };
+        syncOptions.updateDialog = {
+          ...CodePush.DEFAULT_UPDATE_DIALOG,
+          ...syncOptions.updateDialog,
+        };
       }
 
       return await new Promise((resolve, reject) => {
@@ -402,19 +475,18 @@ async function syncInternal(options = {}, syncStatusChangeCallback, downloadProg
             onPress: () => {
               syncStatusChangeCallback(CodePush.SyncStatus.UPDATE_IGNORED);
               resolve(CodePush.SyncStatus.UPDATE_IGNORED);
-            }
+            },
           });
         }
-        
-        // Since the install button should be placed to the 
+
+        // Since the install button should be placed to the
         // right of any other button, add it last
         dialogButtons.push({
           text: installButtonText,
-          onPress:() => {
-            doDownloadAndInstall()
-              .then(resolve, reject);
-          }
-        })
+          onPress: () => {
+            doDownloadAndInstall().then(resolve, reject);
+          },
+        });
 
         // If the update has a description, and the developer
         // explicitly chose to display it, then set that as the message
@@ -426,24 +498,31 @@ async function syncInternal(options = {}, syncStatusChangeCallback, downloadProg
         Alert.alert(syncOptions.updateDialog.title, message, dialogButtons);
       });
     } else {
-      return await doDownloadAndInstall();
+      if (downloadMark) {
+        // 增加何时下载安装包状态
+        return await doDownloadAndInstall();
+      }
     }
   } catch (error) {
     syncStatusChangeCallback(CodePush.SyncStatus.UNKNOWN_ERROR);
     log(error.message);
     throw error;
   }
-};
+}
 
 let CodePush;
 
 function codePushify(options = {}) {
   let React;
-  let ReactNative = require("react-native");
+  let ReactNative = require('react-native');
 
-  try { React = require("react"); } catch (e) { }
+  try {
+    React = require('react');
+  } catch (e) {}
   if (!React) {
-    try { React = ReactNative.React; } catch (e) { }
+    try {
+      React = ReactNative.React;
+    } catch (e) {}
     if (!React) {
       throw new Error("Unable to find the 'React' module.");
     }
@@ -451,9 +530,9 @@ function codePushify(options = {}) {
 
   if (!React.Component) {
     throw new Error(
-`Unable to find the "Component" class, please either:
+      `Unable to find the "Component" class, please either:
 1. Upgrade to a newer version of React Native that supports it, or
-2. Call the codePush.sync API in your component instead of using the @codePush decorator`
+2. Call the codePush.sync API in your component instead of using the @codePush decorator`,
     );
   }
 
@@ -483,38 +562,47 @@ function codePushify(options = {}) {
 
           let handleBinaryVersionMismatchCallback;
           if (rootComponentInstance && rootComponentInstance.codePushOnBinaryVersionMismatch) {
-            handleBinaryVersionMismatchCallback = rootComponentInstance.codePushOnBinaryVersionMismatch;
+            handleBinaryVersionMismatchCallback =
+              rootComponentInstance.codePushOnBinaryVersionMismatch;
             if (rootComponentInstance instanceof React.Component) {
-              handleBinaryVersionMismatchCallback = handleBinaryVersionMismatchCallback.bind(rootComponentInstance);
+              handleBinaryVersionMismatchCallback = handleBinaryVersionMismatchCallback.bind(
+                rootComponentInstance,
+              );
             }
           }
 
-          CodePush.sync(options, syncStatusCallback, downloadProgressCallback, handleBinaryVersionMismatchCallback);
+          CodePush.sync(
+            options,
+            syncStatusCallback,
+            downloadProgressCallback,
+            handleBinaryVersionMismatchCallback,
+          );
           if (options.checkFrequency === CodePush.CheckFrequency.ON_APP_RESUME) {
-            ReactNative.AppState.addEventListener("change", (newState) => {
-              newState === "active" && CodePush.sync(options, syncStatusCallback, downloadProgressCallback);
+            ReactNative.AppState.addEventListener('change', (newState) => {
+              newState === 'active' &&
+                CodePush.sync(options, syncStatusCallback, downloadProgressCallback);
             });
           }
         }
       }
 
       render() {
-        const props = {...this.props};
+        const props = { ...this.props };
 
         // we can set ref property on class components only (not stateless)
         // check it by render method
         if (RootComponent.prototype.render) {
-          props.ref = "rootComponent";
+          props.ref = 'rootComponent';
         }
 
-        return <RootComponent {...props} />
+        return <RootComponent {...props} />;
       }
-    }
+    };
 
     return hoistStatics(extended, RootComponent);
-  }
+  };
 
-  if (typeof options === "function") {
+  if (typeof options === 'function') {
     // Infer that the root component was directly passed to us.
     return decorator(options);
   } else {
@@ -529,6 +617,7 @@ function codePushify(options = {}) {
 if (NativeCodePush) {
   CodePush = codePushify;
   Object.assign(CodePush, {
+    changeDownloadMark, // 触发下载状态
     AcquisitionSdk: Sdk,
     checkForUpdate,
     getConfiguration,
@@ -547,7 +636,7 @@ if (NativeCodePush) {
       IMMEDIATE: NativeCodePush.codePushInstallModeImmediate, // Restart the app immediately
       ON_NEXT_RESTART: NativeCodePush.codePushInstallModeOnNextRestart, // Don't artificially restart the app. Allow the update to be "picked up" on the next app restart
       ON_NEXT_RESUME: NativeCodePush.codePushInstallModeOnNextResume, // Restart the app the next time it is resumed from the background
-      ON_NEXT_SUSPEND: NativeCodePush.codePushInstallModeOnNextSuspend // Restart the app _while_ it is in the background,
+      ON_NEXT_SUSPEND: NativeCodePush.codePushInstallModeOnNextSuspend, // Restart the app _while_ it is in the background,
       // but only after it has been in the background for "minimumBackgroundDuration" seconds (0 by default),
       // so that user context isn't lost unless the app suspension is long enough to not matter
     },
@@ -560,35 +649,37 @@ if (NativeCodePush) {
       CHECKING_FOR_UPDATE: 5,
       AWAITING_USER_ACTION: 6,
       DOWNLOADING_PACKAGE: 7,
-      INSTALLING_UPDATE: 8
+      INSTALLING_UPDATE: 8,
     },
     CheckFrequency: {
       ON_APP_START: 0,
       ON_APP_RESUME: 1,
-      MANUAL: 2
+      MANUAL: 2,
     },
     UpdateState: {
       RUNNING: NativeCodePush.codePushUpdateStateRunning,
       PENDING: NativeCodePush.codePushUpdateStatePending,
-      LATEST: NativeCodePush.codePushUpdateStateLatest
+      LATEST: NativeCodePush.codePushUpdateStateLatest,
     },
     DeploymentStatus: {
-      FAILED: "DeploymentFailed",
-      SUCCEEDED: "DeploymentSucceeded",
+      FAILED: 'DeploymentFailed',
+      SUCCEEDED: 'DeploymentSucceeded',
     },
     DEFAULT_UPDATE_DIALOG: {
       appendReleaseDescription: false,
-      descriptionPrefix: " Description: ",
-      mandatoryContinueButtonLabel: "Continue",
-      mandatoryUpdateMessage: "An update is available that must be installed.",
-      optionalIgnoreButtonLabel: "Ignore",
-      optionalInstallButtonLabel: "Install",
-      optionalUpdateMessage: "An update is available. Would you like to install it?",
-      title: "Update available"
-    }
+      descriptionPrefix: ' Description: ',
+      mandatoryContinueButtonLabel: 'Continue',
+      mandatoryUpdateMessage: 'An update is available that must be installed.',
+      optionalIgnoreButtonLabel: 'Ignore',
+      optionalInstallButtonLabel: 'Install',
+      optionalUpdateMessage: 'An update is available. Would you like to install it?',
+      title: 'Update available',
+    },
   });
 } else {
-  log("The CodePush module doesn't appear to be properly installed. Please double-check that everything is setup correctly.");
+  log(
+    "The CodePush module doesn't appear to be properly installed. Please double-check that everything is setup correctly.",
+  );
 }
 
 module.exports = CodePush;
